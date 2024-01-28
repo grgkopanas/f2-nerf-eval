@@ -10,17 +10,18 @@ defaults:
 dataset_name: example
 case_name: tmp
 exp_name: test
+images_path: default
 
 is_continue: false
 
 mode: train
 
 field:
-  log2_table_size: 20
+  log2_table_size: 22
 
 renderer:
   # Appearance embedding to handling unstable lighting conditions
-  use_app_emb: true
+  use_app_emb: false
 
 pts_sampler:
   split_dist_thres: 1.5
@@ -28,8 +29,9 @@ pts_sampler:
   scale_by_dis: true
 
 dataset:
-  factor: 2
+  factor: 1
   bounds_factor: [ 0.5, 4.0 ]
+  data_path: ""
 
 train:
   ray_march_init_fineness: 16

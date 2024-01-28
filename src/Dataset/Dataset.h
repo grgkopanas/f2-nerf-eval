@@ -57,6 +57,7 @@ public:
   int height_, width_;
   std::vector<int> train_set_, test_set_, val_set_, split_info_;
   Tensor image_tensors_;
+  std::vector<std::string> image_filenames;
   RaySampleMode ray_sample_mode_;
 };
 

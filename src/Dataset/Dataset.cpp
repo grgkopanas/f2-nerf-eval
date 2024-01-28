@@ -20,6 +20,7 @@ Dataset::Dataset(GlobalDataPool* global_data_pool) {
 
   const auto& config = global_data_pool_->config_["dataset"];
   const auto data_path = config["data_path"].as<std::string>();
+  const auto images_path =  global_data_pool_->config_["images_path"].as<std::string>();
   const auto factor = config["factor"].as<float>();
   const auto ray_sample_mode = config["ray_sample_mode"].as<std::string>();
   if (ray_sample_mode == "single_image") {
@@ -79,16 +80,51 @@ Dataset::Dataset(GlobalDataPool* global_data_pool) {
   std::vector<Tensor> images;
   // Load images
   {
+    std::string name;
     ScopeWatch watch("LoadImages");
+    std::cout << data_path << std::endl;
     std::ifstream image_list(data_path + "/image_list.txt");
-    for (int i = 0; i < n_images_; i++) {
-      std::string image_path;
-      std::getline(image_list, image_path);
-      images.push_back(Utils::ReadImageTensor(image_path).to(torch::kCPU));
+    while (std::getline(image_list, name)) {
+      image_filenames.push_back(name);
+      std::cout << data_path + images_path + name << std::endl;
+      images.push_back(Utils::ReadImageTensor(data_path + images_path + name).to(torch::kCPU));
+    }
+
+
+    std::vector<std::string> train_filenames;
+    std::ifstream train_list(data_path + "/sparse/0/train.txt");
+    if (train_list) {
+      while (std::getline(train_list, name)) {
+        train_filenames.push_back(name);
+      }
+    } else {
+        std::cerr << "Error opening file: " << data_path + "/sparse/0/train.txt" << std::endl;
+    }
+
+    std::vector<std::string> test_filenames;
+    std::ifstream test_list(data_path + "/sparse/0/test.txt");
+    if (test_list) {
+      while (std::getline(test_list, name)) {
+        std::cout << name << std::endl;
+        test_filenames.push_back(name);
+      }
+    }
+    else {
+      std::cerr << "Error opening file: " << data_path + "/sparse/0/test.txt" << std::endl;
+    }
+
+    for (int i=0; i < n_images_; i++) {
+      auto it = std::find(test_filenames.begin(), test_filenames.end(), image_filenames[i]);
+      if (it != test_filenames.end()) {
+        test_set_.push_back(i);
+      }
+      else {
+        train_set_.push_back(i);
+      }
     }
   }
-
   // Load train/test/val split info
+  /*
   try {
     cnpy::NpyArray sp_arr = cnpy::npy_load(data_path + "/split.npy");
     CHECK_EQ(sp_arr.shape[0], n_images_);
@@ -107,7 +143,8 @@ Dataset::Dataset(GlobalDataPool* global_data_pool) {
       if (i % 8 == 0) test_set_.push_back(i);
       else train_set_.push_back(i);
     }
-  }
+  }*/
+
   std::cout << fmt::format("Number of train/test/val images: {}/{}/{}",
                            train_set_.size(), test_set_.size(), val_set_.size()) << std::endl;
 
@@ -260,7 +297,7 @@ std::tuple<BoundedRays, Tensor, Tensor> Dataset::RandRaysDataOfCamera(int idx, i
   Tensor i = torch::randint(0, H, batch_size, CUDALong);
   Tensor j = torch::randint(0, W, batch_size, CUDALong);
   auto [ rays_o, rays_d ] = Img2WorldRay(idx, torch::stack({ i, j }, -1).to(torch::kFloat32));
-  Tensor gt_colors = image_tensors_[idx].view({-1, 3}).index({ (i * W + j) }).to(torch::kCUDA).contiguous();
+  Tensor gt_colors = image_tensors_[idx].view({-1, image_tensors_.size(-1)}).index({ (i * W + j) }).to(torch::kCUDA).contiguous();
   float near = bounds_.index({idx, 0}).item<float>();
   float far  = bounds_.index({idx, 1}).item<float>();
 
@@ -290,7 +327,7 @@ std::tuple<BoundedRays, Tensor, Tensor> Dataset::RandRaysData(int batch_size, in
   Tensor j = torch::randint(0, width_, batch_size, CPULong);
   Tensor ij = torch::stack({i, j}, -1).to(torch::kCUDA).contiguous();
 
-  Tensor gt_colors = image_tensors_.view({-1, 3}).index({ (cam_indices * height_ * width_ + i * width_ + j).to(torch::kLong) }).to(torch::kCUDA).contiguous();
+  Tensor gt_colors = image_tensors_.view({-1, image_tensors_.size(-1)}).index({ (cam_indices * height_ * width_ + i * width_ + j).to(torch::kLong) }).to(torch::kCUDA).contiguous();
   cam_indices = cam_indices.to(torch::kCUDA);
   auto [ rays_o, rays_d ] = Img2WorldRayFlex(cam_indices.to(torch::kInt32), ij.to(torch::kInt32));
   Tensor bounds = bounds_.index({cam_indices.to(torch::kLong)}).contiguous();

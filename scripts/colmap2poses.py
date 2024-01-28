@@ -134,40 +134,13 @@ class Dataset:
             sort_img_idx.append(self.names.index(sorted_image_names[i]))
         img_idx = np.array(sort_img_idx, dtype=np.int32)
         self.poses = self.poses[sort_img_idx]
+        self.names = [self.names[i] for i in sort_img_idx]
 
         # calc near-far bounds
         self.bounds = np.zeros([self.n_images, 2], dtype=np.float32)
-        name_to_ids = scene_manager.name_to_image_id
-        points3D = scene_manager.points3D
-        points3D_ids = scene_manager.point3D_ids
-        point3D_id_to_images = scene_manager.point3D_id_to_images
-        image_id_to_image_idx = np.zeros(self.n_images + 10, dtype=np.int32)
-        for image_name in self.names:
-            image_id_to_image_idx[name_to_ids[image_name]] = sorted_image_names.index(image_name)
-
-        vis_arr = []
-        for pts_i in range(len(points3D)):
-            cams = np.zeros([self.n_images], dtype=np.uint8)
-            images_ids = point3D_id_to_images[points3D_ids[pts_i]]
-            for image_info in images_ids:
-                image_id = image_info[0]
-                image_idx = image_id_to_image_idx[image_id]
-                cams[image_idx] = 1
-            vis_arr.append(cams)
-
-        vis_arr = np.stack(vis_arr, 1)     # [n_images, n_pts ]
 
         for img_i in range(self.n_images):
-            vis = vis_arr[img_i]
-            pts = points3D[vis == 1]
-            c2w = np.diag([1., 1., 1., 1.])
-            c2w[:3, :4] = self.poses[img_i]
-            w2c = np.linalg.inv(c2w)
-            z_vals = (w2c[None, 2, :3] * pts).sum(-1) + w2c[None, 2, 3]
-            depth = -z_vals
-            near_depth, far_depth = np.percentile(depth, 1.), np.percentile(depth, 99.)
-            near_depth = near_depth * .5
-            far_depth = far_depth * 5.
+            near_depth, far_depth = 0.05, 200.0
             self.bounds[img_i, 0], self.bounds[img_i, 1] = near_depth, far_depth
 
         # Move all to numpy
@@ -193,6 +166,10 @@ class Dataset:
                                    self.bounds.reshape([n, -1])], axis=-1)
             data = np.ascontiguousarray(np.array(data).astype(np.float64))
             np.save(pjoin(data_dir, 'cams_meta.npy'), data)
+            with open(os.path.join(data_dir, 'image_list.txt'), 'w') as file:
+                for image_name in self.names:
+                    file.write(image_name + '\n')
+
         elif 'poses_bounds' in out_mode :
             poses = deepcopy(self.poses)
             image_list = []

@@ -1,6 +1,7 @@
 //
 // Created by ppwang on 2022/5/6.
 //
+#include <filesystem>
 
 #include "ExpRunner.h"
 #include <experimental/filesystem>  // GCC 7.5?
@@ -12,7 +13,7 @@
 
 namespace fs = std::experimental::filesystem::v1;
 using Tensor = torch::Tensor;
-
+using namespace torch::indexing;
 
 ExpRunner::ExpRunner(const std::string& conf_path) {
   global_data_pool_ = std::make_unique<GlobalDataPool>(conf_path);
@@ -93,7 +94,13 @@ void ExpRunner::Train() {
       auto render_result = renderer_->Render(rays_o, rays_d, bounds, emb_idx);
       Tensor pred_colors = render_result.colors.index({Slc(0, cur_batch_size)});
       Tensor disparity = render_result.disparity;
-      Tensor color_loss = torch::sqrt((pred_colors - gt_colors).square() + 1e-4f).mean();
+
+      Tensor error = torch::sqrt((pred_colors - gt_colors.index({"...", Slice(None, 3)})).square() + 1e-4f);
+      if (gt_colors.size(-1) == 4)
+      {
+        error = error * gt_colors.index({"...", Slice(3, 4)});
+      }
+      Tensor color_loss = error.mean();
 
       Tensor disparity_loss = disparity.square().mean();
 
@@ -117,7 +124,22 @@ void ExpRunner::Train() {
                     disparity_loss * disp_loss_weight_ +
                     tv_loss * tv_loss_weight_;
 
-      float mse = (pred_colors - gt_colors).square().mean().item<float>();
+
+      error = (pred_colors - gt_colors.index({"...", Slice(None, 3)})).square();
+      if (gt_colors.size(-1) == 4)
+      {
+        error = error * gt_colors.index({"...", Slice(3, 4)});
+      }
+      else
+      {
+        std::cout << "Masks not found\n";
+      }
+      float mse = error.mean().item<float>();
+      if (gt_colors.size(-1) == 4)
+      {
+        mse /= gt_colors.index({"...", Slice(3, 4)}).mean().item<float>();
+      }
+
       float psnr = 20.f * std::log10(1 / std::sqrt(mse));
       psnr_smooth = psnr_smooth < 0.f ? psnr : psnr * .1f + psnr_smooth * .9f;
       CHECK(!std::isnan(pred_colors.mean().item<float>()));
@@ -309,7 +331,7 @@ void ExpRunner::VisualizeImage(int idx) {
   int H = dataset_->height_;
   int W = dataset_->width_;
 
-  Tensor img_tensor = torch::cat({dataset_->image_tensors_[idx].to(torch::kCPU).reshape({H, W, 3}),
+  Tensor img_tensor = torch::cat({dataset_->image_tensors_[idx].to(torch::kCPU).index({"...", Slice(None, 3)}).reshape({H, W, 3}),
                                   pred_colors.reshape({H, W, 3}),
                                   first_oct_dis.reshape({H, W, 1}).repeat({1, 1, 3}),
                                   pred_disps.reshape({H, W, 1}).repeat({1, 1, 3})}, 1);
@@ -349,7 +371,6 @@ void ExpRunner::TestImages() {
   float cnt = 0.f;
   YAML::Node out_info;
   {
-    fs::create_directories(base_exp_dir_ + "/test_images");
     for (int i: dataset_->test_set_) {
       auto [rays_o, rays_d, bounds] = dataset_->RaysOfCamera(i);
       auto [pred_colors, first_oct_dis, pred_disps] = RenderWholeImage(rays_o, rays_d, bounds);  // At this stage, the returned number is
@@ -365,13 +386,20 @@ void ExpRunner::TestImages() {
       pred_colors = pred_colors.reshape({H, W, 3});
       pred_colors = quantify(pred_colors);
       float mse = (pred_colors.reshape({H, W, 3}) -
-                   dataset_->image_tensors_[i].to(torch::kCPU).reshape({H, W, 3})).square().mean().item<float>();
+                   dataset_->image_tensors_[i].to(torch::kCPU).index({"...", Slice(None, 3)}).reshape({H, W, 3})).square().mean().item<float>();
       float psnr = 20.f * std::log10(1 / std::sqrt(mse));
       out_info[fmt::format("{}", i)] = psnr;
       std::cout << fmt::format("{}: {}", i, psnr) << std::endl;
       psnr_sum += psnr;
       cnt += 1.f;
-      Utils::WriteImageTensor(base_exp_dir_ + "/test_images/" + fmt::format("color_{}_{:0>3d}.png", iter_step_, i),
+
+      std::filesystem::path filePath(base_exp_dir_ + "/test_images/" + dataset_->image_filenames[i]);
+      std::filesystem::path directory = filePath.parent_path();
+      std::cout << directory << std::endl;
+      std::cout << base_exp_dir_ + "/test_images/" + dataset_->image_filenames[i] << std::endl;
+      fs::create_directories(directory.string());
+      
+      Utils::WriteImageTensor(base_exp_dir_ + "/test_images/" + dataset_->image_filenames[i],
                              pred_colors);
       Utils::WriteImageTensor(base_exp_dir_ + "/test_images/" + fmt::format("depth_{}_{:0>3d}.png", iter_step_, i),
                               pred_disps.repeat({1, 1, 3}));
